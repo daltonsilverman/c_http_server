@@ -9,9 +9,14 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#define MYPORT "8080" // the port users will be connecting to
+#define BACKLOG 10    // how many pending connections queue holds
+
 int main() {
+  struct sockaddr_storage their_addr;
+  socklen_t addr_size;
   struct addrinfo hints, *res;
-  int sockfd;
+  int sockfd, new_fd;
 
   // first, load up address structs with getaddrinfo();
 
@@ -20,7 +25,7 @@ int main() {
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_flags = AI_PASSIVE; // fill in my IP for me
 
-  getaddrinfo(NULL, "8080", &hints, &res);
+  getaddrinfo(NULL, MYPORT, &hints, &res);
   // TODO: Error Checking
 
   // make a socket
@@ -33,6 +38,22 @@ int main() {
   // TODO: Error Checking
 
   // begin listening for requests
-  listen(sockfd, 10);
+  listen(sockfd, BACKLOG);
   // TODO: Error Checking
+
+  // accept an incoming connection:
+
+  addr_size = sizeof their_addr;
+  new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &addr_size);
+
+  // ready to communicate on socket descriptor new_fd
+
+  char *msg = "Server is working";
+  int len, bytes_sent;
+  len = strlen(msg);
+  bytes_sent = send(sockfd, msg, len, 0);
+  // TODO: Check that message was fully sent
+
+  // close socket
+  close(sockfd);
 }
