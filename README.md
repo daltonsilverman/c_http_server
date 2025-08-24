@@ -28,8 +28,8 @@ Ref: [HTTP Protocl](https://datatracker.ietf.org/doc/html/rfc1945)
 
 ## Sockets
 
-[] Create a socket
-[] Bind the socket to an address
+[X] Create a socket
+[X] Bind the socket to an address
 [] Listen on the address
 [] Block on Accept until a connection is made
 [] Read on the connected socket
