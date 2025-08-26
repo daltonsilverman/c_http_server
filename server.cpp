@@ -1,59 +1,148 @@
+
+/*
+** server.cpp - an HTTP compatible server
+*/
+
 #include <arpa/inet.h>
-#include <cstddef>
+#include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
-#define MYPORT "8080" // the port users will be connecting to
-#define BACKLOG 10    // how many pending connections queue holds
+#define BACKLOG 10 // how many pending connections queue will ho
 
-int main() {
-  struct sockaddr_storage their_addr;
-  socklen_t addr_size;
-  struct addrinfo hints, *res;
+void sigchld_handler(int s) {
+  (void)s; // quiet unused variable warning
+
+  // waitpid() might overwrite errno, so we save and restore it:
+  int saved_errno = errno;
+
+  while (waitpid(-1, NULL, WNOHANG) > 0)
+    ;
+
+  errno = saved_errno;
+}
+
+// get sockaddr, IPv4 or IPv6:
+void *get_in_addr(struct sockaddr *sa) {
+  if (sa->sa_family == AF_INET) {
+    return &(((struct sockaddr_in *)sa)->sin_addr);
+  }
+
+  return &(((struct sockaddr_in6 *)sa)->sin6_addr);
+}
+
+int main(int argc, char **argv) {
+  if (argc != 2) {
+    fprintf(stderr, "command must be inputted in form ./server \{PORT\}");
+    return 1;
+  }
+
+  char *port = argv[1];
+  char *end;
+
+  long val = strtol(port, &end, 10);
+
+  if (*end != '\0') {
+    fprintf(stderr, "Port number must be entered as an integer.");
+    return 1;
+  }
+
+  if (val < 1024 || val > 49150) {
+    fprintf(stderr, "Port number should be within range 1024-49151.");
+  }
+
+  // listen on sock_fd, new connection on new_fd
   int sockfd, new_fd;
-
-  // first, load up address structs with getaddrinfo();
+  struct addrinfo hints, *servinfo, *p;
+  struct sockaddr_storage their_addr; // connector's address info
+  socklen_t sin_size;
+  struct sigaction sa;
+  int yes = 1;
+  char s[INET6_ADDRSTRLEN];
+  int rv;
 
   memset(&hints, 0, sizeof hints);
-  hints.ai_family = AF_UNSPEC; // use IPv4 or IPv6, whichever
+  hints.ai_family = AF_INET;
   hints.ai_socktype = SOCK_STREAM;
-  hints.ai_flags = AI_PASSIVE; // fill in my IP for me
+  hints.ai_flags = AI_PASSIVE; // use my own IP
 
-  getaddrinfo(NULL, MYPORT, &hints, &res);
-  // TODO: Error Checking
+  if ((rv = getaddrinfo(NULL, port, &hints, &servinfo)) != 0) {
+    fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+    return 1;
+  }
 
-  // make a socket
+  // loop through all the results and bind to the first we can
+  for (p = servinfo; p != NULL; p = p->ai_next) {
+    if ((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
+      perror("server: socket");
+      continue;
+    }
 
-  sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
+      perror("setsockopt");
+      exit(1);
+    }
 
-  // bind it to the port we passed in to getaddrinfo();
+    if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
+      close(sockfd);
+      perror("server: bind");
+      continue;
+    }
 
-  bind(sockfd, res->ai_addr, res->ai_addrlen);
-  // TODO: Error Checking
+    break;
+  }
 
-  // begin listening for requests
-  listen(sockfd, BACKLOG);
-  // TODO: Error Checking
+  freeaddrinfo(servinfo); // all done with this structure
 
-  // accept an incoming connection:
+  if (p == NULL) {
+    fprintf(stderr, "server: failed to bind\n");
+    exit(1);
+  }
 
-  addr_size = sizeof their_addr;
-  new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &addr_size);
+  if (listen(sockfd, BACKLOG) == -1) {
+    perror("listen");
+    exit(1);
+  }
 
-  // ready to communicate on socket descriptor new_fd
+  sa.sa_handler = sigchld_handler; // reap all dead processes
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_RESTART;
+  if (sigaction(SIGCHLD, &sa, NULL) == -1) {
+    perror("sigaction");
+    exit(1);
+  }
 
-  char *msg = "Server is working";
-  int len, bytes_sent;
-  len = strlen(msg);
-  bytes_sent = send(sockfd, msg, len, 0);
-  // TODO: Check that message was fully sent
+  printf("server: waiting for connections...\n");
 
-  // close socket
-  close(sockfd);
+  while (1) { // main accept() loop
+    sin_size = sizeof their_addr;
+    new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
+    if (new_fd == -1) {
+      perror("accept");
+      continue;
+    }
+
+    inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr *)&their_addr),
+              s, sizeof s);
+    printf("server: got connection from %s\n", s);
+
+    if (!fork()) { // this is the child process
+      close(sockfd);
+      if (send(new_fd, "Hello, world!", 13, 0) == -1)
+        perror("send");
+      close(new_fd);
+      exit(0);
+    }
+    close(new_fd);
+  }
+
+  return 0;
 }
